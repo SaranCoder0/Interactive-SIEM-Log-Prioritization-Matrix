@@ -1,0 +1,431 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Interactive SIEM Log Prioritization Matrix</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <!-- Chosen Palette: Calm Neutrals with Priority Accents -->
+    <!-- Application Structure Plan: A dashboard-centric design featuring a primary interactive table (the "Matrix") as the central element. The user flow is driven by top-level controls (filters for priority, device, and a search bar) that dynamically update both the table and accompanying summary visualizations (donut and bar charts). This structure was chosen to transform a static list into an exploratory tool. It allows professionals to immediately drill down into the data that's most relevant to their current task (e.g., "Show me all critical logs from domain controllers") rather than linearly reading a report, thus maximizing usability and speed to insight. -->
+    <!-- Visualization & Content Choices: 
+        - Log Data -> Goal: Organize & Inform -> Presentation: Interactive HTML Table -> Interaction: Filter by priority/source, search, sort by columns -> Justification: Directly addresses the 'excel-like matrix' request, providing a dense, structured view that is ideal for detailed exploration. JS-powered filtering makes it dynamic.
+        - Priority Distribution -> Goal: Summarize -> Presentation: Donut Chart -> Interaction: Updates based on filters -> Justification: Offers a quick, at-a- glance understanding of the log priority composition in the current filtered view. (Chart.js/Canvas)
+        - Logs by Source -> Goal: Compare -> Presentation: Bar Chart -> Interaction: Updates based on filters -> Justification: Allows easy comparison of log volume/importance across different device categories, helping identify high-risk areas. (Chart.js/Canvas)
+    -->
+    <!-- CONFIRMATION: NO SVG graphics used. NO Mermaid JS used. -->
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+        }
+        .chart-container {
+            position: relative;
+            width: 100%;
+            max-width: 500px;
+            margin-left: auto;
+            margin-right: auto;
+            height: 320px;
+            max-height: 350px;
+        }
+        @media (min-width: 768px) {
+            .chart-container {
+                height: 350px;
+            }
+        }
+        .priority-critical { background-color: #fde2e2; color: #9b2c2c; border-left: 4px solid #ef4444; }
+        .priority-high { background-color: #fef3c7; color: #92400e; border-left: 4px solid #f59e0b; }
+        .priority-medium { background-color: #dbeafe; color: #1e40af; border-left: 4px solid #3b82f6; }
+        .priority-informational { background-color: #e0f2f7; color: #0e7490; border-left: 4px solid #22d3ee; }
+        
+        .table-header-sortable {
+            cursor: pointer;
+            position: relative;
+            padding-right: 1.5rem;
+        }
+        .table-header-sortable::after {
+            content: '↕';
+            position: absolute;
+            right: 0.5rem;
+            top: 50%;
+            transform: translateY(-50%);
+            color: #9ca3af;
+            font-size: 0.8em;
+        }
+    </style>
+     <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body class="bg-stone-50 text-slate-800">
+
+    <div class="container mx-auto p-4 sm:p-6 lg:p-8">
+
+        <header class="text-center mb-8">
+            <h1 class="text-3xl md:text-4xl font-bold text-teal-800">Interactive SIEM Log Prioritization Matrix</h1>
+            <p class="mt-2 text-lg text-slate-600">An exploratory tool for Cybersecurity Professionals to navigate and prioritize critical security logs.</p>
+        </header>
+
+        <section id="introduction" class="mb-8 bg-white p-6 rounded-lg shadow-sm">
+            <h2 class="text-2xl font-semibold text-teal-700 mb-3">Why Prioritize SIEM Logs?</h2>
+            <p class="text-slate-600">
+                In any modern IT environment, security devices and systems generate a massive volume of logs. Without a clear strategy, analysts can quickly become overwhelmed, leading to "alert fatigue" and potentially missing genuine threats. This interactive matrix is designed to help you focus on the logs that matter most. Use the filters below to slice the data by priority level or log source. The interactive table and charts will update in real-time to help you identify critical events, understand their context, and determine which key data fields to monitor for effective threat detection and response.
+            </p>
+        </section>
+
+        <div class="bg-white p-4 sm:p-6 rounded-lg shadow-sm mb-8">
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-4 items-center">
+                <div class="md:col-span-1">
+                    <label for="search-input" class="block text-sm font-medium text-slate-700 mb-1">Search Logs</label>
+                    <input type="text" id="search-input" placeholder="e.g., Ransomware, Logon Failure..." class="w-full p-2 border border-slate-300 rounded-md focus:ring-2 focus:ring-teal-500 focus:border-teal-500">
+                </div>
+                <div class="md:col-span-2">
+                    <label class="block text-sm font-medium text-slate-700 mb-1">Filter by Priority</label>
+                    <div id="priority-filters" class="flex flex-wrap gap-2">
+                        <button data-priority="all" class="px-4 py-2 text-sm font-medium rounded-md bg-teal-600 text-white shadow-sm hover:bg-teal-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-teal-500">All Priorities</button>
+                        <button data-priority="Critical" class="px-4 py-2 text-sm font-medium rounded-md bg-red-600 text-white shadow-sm hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500">Critical</button>
+                        <button data-priority="High" class="px-4 py-2 text-sm font-medium rounded-md bg-amber-500 text-white shadow-sm hover:bg-amber-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-amber-500">High</button>
+                        <button data-priority="Medium" class="px-4 py-2 text-sm font-medium rounded-md bg-blue-500 text-white shadow-sm hover:bg-blue-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500">Medium</button>
+                        <button data-priority="Informational" class="px-4 py-2 text-sm font-medium rounded-md bg-cyan-500 text-white shadow-sm hover:bg-cyan-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-cyan-500">Informational</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <main class="space-y-8">
+            <div class="bg-white p-4 sm:p-6 rounded-lg shadow-sm overflow-x-auto">
+                 <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-4">
+                    <h3 class="text-xl font-semibold text-teal-700">Log Details Matrix</h3>
+                    <div class="mt-3 sm:mt-0">
+                        <label for="source-filter" class="sr-only">Filter by Log Source</label>
+                        <select id="source-filter" class="p-2 border border-slate-300 rounded-md focus:ring-2 focus:ring-teal-500">
+                            <option value="all">All Log Sources</option>
+                        </select>
+                    </div>
+                </div>
+                <table class="w-full text-sm text-left text-slate-500">
+                    <thead class="text-xs text-slate-700 uppercase bg-slate-50">
+                        <tr>
+                            <th scope="col" class="px-6 py-3 table-header-sortable" data-sort="logSource">Log Source</th>
+                            <th scope="col" class="px-6 py-3 table-header-sortable" data-sort="logName">Log Name / Type</th>
+                            <th scope="col" class="px-6 py-3 table-header-sortable" data-sort="priority">Priority</th>
+                            <th scope="col" class="px-6 py-3">Why It's a Priority</th>
+                            <th scope="col" class="px-6 py-3">Key Fields to Monitor</th>
+                        </tr>
+                    </thead>
+                    <tbody id="log-table-body">
+                    </tbody>
+                </table>
+                 <p id="no-results" class="text-center py-8 text-slate-500 hidden">No logs match the current filters.</p>
+            </div>
+
+            <section id="visualizations" class="grid grid-cols-1 lg:grid-cols-2 gap-8">
+                <div class="bg-white p-6 rounded-lg shadow-sm">
+                    <h3 class="text-xl font-semibold text-teal-700 mb-4 text-center">Log Distribution by Priority</h3>
+                    <div class="chart-container">
+                        <canvas id="priorityChart"></canvas>
+                    </div>
+                </div>
+                <div class="bg-white p-6 rounded-lg shadow-sm">
+                    <h3 class="text-xl font-semibold text-teal-700 mb-4 text-center">High-Impact Logs by Source</h3>
+                    <div class="chart-container">
+                        <canvas id="sourceChart"></canvas>
+                    </div>
+                </div>
+            </section>
+        </main>
+
+        <footer class="text-center mt-12 py-4 border-t border-slate-200">
+            <p class="text-sm text-slate-500">&copy; 2025 Cybersecurity Insights. This is an informational tool.</p>
+        </footer>
+    </div>
+
+    <script>
+        const logData = [
+            { logSource: 'Domain Controller', logName: 'Privileged Group Membership Change', priority: 'Critical', rationale: 'Indicates potential privilege escalation, a key step in ransomware and APT attacks. Changes to groups like Domain Admins must be investigated immediately.', keyFields: 'EventID 4728/4732/4756, TargetUserName, GroupName, UserWhoAdded' },
+            { logSource: 'EDR / Endpoint', logName: 'Ransomware / Malware Detection', priority: 'Critical', rationale: 'Direct evidence of a severe, active compromise on an endpoint. Immediate containment is required to prevent spread.', keyFields: 'AlertName, FileName, FilePath, ProcessName, Hostname, ActionTaken (Blocked/Quarantined)' },
+            { logSource: 'Firewall / NGFW', logName: 'Outbound Traffic to Known C2 Servers', priority: 'Critical', rationale: 'Strong indicator of a compromised host communicating with an attacker\'s command and control infrastructure.', keyFields: 'SrcIP, DstIP, DstPort, ThreatName, GeoLocation' },
+            { logSource: 'Cloud Platform (IAM)', logName: 'Root/Admin Account Usage or API Key Creation', priority: 'Critical', rationale: 'Usage of the highest-privileged account should be extremely rare and is a high-value target for attackers.', keyFields: 'UserIdentity, EventName, SourceIPAddress, UserAgent' },
+            { logSource: 'Domain Controller', logName: 'Multiple Account Lockouts (Single User)', priority: 'High', rationale: 'Could indicate a brute-force or password spray attack against a specific user account.', keyFields: 'EventID 4740, TargetUserName, SourceWorkstation' },
+            { logSource: 'EDR / Endpoint', logName: 'Suspicious PowerShell Execution', priority: 'High', rationale: 'PowerShell is heavily used in "living off the land" attacks for fileless malware, lateral movement, and reconnaissance.', keyFields: 'EventID 4104, ScriptBlockText, User, Hostname, CommandLine' },
+            { logSource: 'VPN / Remote Access', logName: 'Login from Unusual Geographic Location', priority: 'High', rationale: 'Sign of credential compromise, especially if the user is not traveling. Often linked to "impossible travel" alerts.', keyFields: 'UserName, SourceIP, GeoLocation, Timestamp' },
+            { logSource: 'Web Proxy', logName: 'Large Data Upload to External Site', priority: 'High', rationale: 'Potential data exfiltration. Correlate with internal data classifications to assess severity.', keyFields: 'SrcIP, DstURL, User, BytesSent, FileType' },
+            { logSource: 'Database Server', logName: 'Multiple Failed Login Attempts', priority: 'High', rationale: 'Indicates a potential attempt to brute-force access to sensitive data stores.', keyFields: 'DBUser, SourceIP, DatabaseName, ErrorCode' },
+            { logSource: 'Windows Security', logName: 'Audit Log Cleared', priority: 'High', rationale: 'Classic anti-forensics technique used by attackers to cover their tracks after a compromise.', keyFields: 'EventID 1102, User' },
+            { logSource: 'Firewall / NGFW', logName: 'Port Scan Detected', priority: 'Medium', rationale: 'Often a precursor to an attack, indicating an external or internal actor is performing reconnaissance on your network.', keyFields: 'ScannerIP, TargetIP, PortsScanned' },
+            { logSource: 'Windows Security', logName: 'New Service Installed', priority: 'Medium', rationale: 'Attackers often install malicious services for persistence. Should be correlated with change management records.', keyFields: 'EventID 4697, ServiceName, ServiceFileName, User' },
+            { logSource: 'Cloud Platform (IAM)', logName: 'Security Group / Firewall Rule Change', priority: 'Medium', rationale: 'Unauthorized changes can expose sensitive systems to the internet. Review against change requests.', keyFields: 'UserIdentity, EventName, RequestParameters (Ports, IP ranges)' },
+            { logSource: 'DNS Server', logName: 'Queries to Dynamic DNS (DDNS) Domains', priority: 'Medium', rationale: 'While sometimes legitimate, DDNS is frequently used by attackers for C2 infrastructure due to its resilience.', keyFields: 'SrcIP, QueryName, Response' },
+            { logSource: 'Windows Security', logName: 'Successful Privileged Account Logon', priority: 'Medium', rationale: 'Monitor for anomalous usage patterns (e.g., off-hours, unusual source workstation) of admin accounts.', keyFields: 'EventID 4624, LogonType, TargetUserName, IpAddress, WorkstationName' },
+            { logSource: 'Firewall / NGFW', logName: 'High Volume Denied Connections (DoS/DDoS)', priority: 'Medium', rationale: 'Indicates a potential Denial of Service (DoS) or Distributed Denial of Service (DDoS) attack attempt, even if blocked. Important for baselining and early warning.', keyFields: 'SrcIP, DstIP, DstPort, ConnectionCount, Protocol, GeoLocation' },
+            { logSource: 'Load Balancer / WAF', logName: 'Unusual Request Rate / Web Attack Signatures', priority: 'High', rationale: 'Detection of high request volumes or patterns indicative of web application attacks (e.g., SQLi, XSS, DDoS).', keyFields: 'ClientIP, RequestURL, UserAgent, HTTPMethod, ResponseCode, RequestRate, AttackType' },
+            { logSource: 'Network Flow (NetFlow/IPFIX)', logName: 'Unusual Traffic Spikes / High Connection Counts', priority: 'Medium', rationale: 'Identifies abnormal network traffic patterns that could indicate reconnaissance, data exfiltration, or early stages of a DDoS attack.', keyFields: 'SrcIP, DstIP, SrcPort, DstPort, Protocol, BytesTransferred, PacketCount, FlowDuration' },
+            { logSource: 'DNS Server', logName: 'High Volume DNS Queries from Single Source', priority: 'Medium', rationale: 'Could indicate a DNS amplification attack, reconnaissance, or a compromised host performing excessive lookups.', keyFields: 'SrcIP, QueryName, QueryCount, ResponseCode' },
+            { logSource: 'Network Device', logName: 'Interface Errors / Discards', priority: 'Informational', rationale: 'While not directly a security threat, high rates can indicate network issues, misconfigurations, or stress from high traffic (e.g., early signs of DoS impact).', keyFields: 'DeviceName, Interface, InErrors, OutErrors, InDiscards, OutDiscards, Timestamp' },
+            { logSource: 'VPN / Remote Access', logName: 'Failed Multi-Factor Authentication (MFA) Attempts', priority: 'High', rationale: 'Indicates an attacker likely has valid credentials but is failing the second factor, a critical alert for account compromise.', keyFields: 'UserName, SourceIP, MFAFailureReason, Timestamp' },
+            { logSource: 'Cloud Platform (Compute)', logName: 'New Public IP Address Assignment', priority: 'Medium', rationale: 'Monitor for unauthorized exposure of internal resources or creation of new attack surfaces in cloud environments.', keyFields: 'InstanceID, PublicIP, UserIdentity, EventTime, Region' },
+            { logSource: 'Mail Gateway', logName: 'High Volume Outbound Emails', priority: 'High', rationale: 'Potential indicator of a compromised mailbox being used for spamming, phishing, or data exfiltration.', keyFields: 'SenderEmail, RecipientCount, Subject, AttachmentInfo, BytesSent, Timestamp' },
+            { logSource: 'Mail Gateway', logName: 'Email with Malicious Attachment/Link', priority: 'Critical', rationale: 'Direct detection of a phishing attempt or malware delivery via email. Immediate user notification and email quarantine are vital.', keyFields: 'Sender, Recipient, Subject, AttachmentName, AttachmentHash, URL, ThreatType, ActionTaken' },
+            { logSource: 'Mail Gateway', logName: 'Spoofed Email Detection', priority: 'High', rationale: 'Indicates an email attempting to impersonate a legitimate sender, often used in phishing or business email compromise (BEC) attacks.', keyFields: 'Sender, Recipient, Subject, FromAddress, MailFrom, SPFResult, DKIMResult, DMARCResult' },
+            { logSource: 'Web Proxy', logName: 'Access to Phishing/Malicious URL', priority: 'High', rationale: 'User clicked on a malicious link. Indicates potential compromise or successful phishing attempt. Immediate endpoint investigation is needed.', keyFields: 'User, SourceIP, DestinationURL, Category, ActionTaken (Blocked/Allowed), Referer' },
+            { logSource: 'Security Awareness Platform', logName: 'User Reported Phishing Email', priority: 'Medium', rationale: 'Direct user feedback on a potential phishing attempt. Valuable for identifying ongoing campaigns and training effectiveness.', keyFields: 'ReportedBy, ReportedEmailSubject, ReportedEmailSender, Timestamp' },
+            { logSource: 'SIEM / SOAR', logName: 'Repeated Failed Logins (across services)', priority: 'High', rationale: 'Correlation of failed logins across multiple services for a single user, indicating a widespread credential stuffing or brute-force attack.', keyFields: 'UserName, SourceIPs, ServicesAffected, TotalFailedAttempts, TimeWindow' },
+            { logSource: 'Cloud Platform (Network)', logName: 'Large Data Transfer Outbound (Cloud Storage)', priority: 'High', rationale: 'Potential data exfiltration from cloud storage buckets or databases. Requires immediate investigation.', keyFields: 'BucketName/DBName, UserIdentity, BytesTransferred, DestinationIP, EventTime' },
+            { logSource: 'Endpoint', logName: 'New Local Administrator Account Created', priority: 'High', rationale: 'Unauthorized creation of local admin accounts can be a persistence mechanism for attackers.', keyFields: 'EventID 4720 (Windows), User, AccountName, UserWhoCreated' },
+            { logSource: 'Network Device', logName: 'Spanning Tree Protocol (STP) Topology Change', priority: 'Medium', rationale: 'Could indicate a network loop, misconfiguration, or an attacker attempting to manipulate network topology.', keyFields: 'DeviceName, Interface, ChangeReason, Timestamp' },
+            { logSource: 'Firewall / NGFW', logName: 'Geo-Blocking Policy Violation', priority: 'Medium', rationale: 'Traffic from/to a restricted geographical region. While often blocked, it warrants monitoring for persistent attempts.', keyFields: 'SrcIP, DstIP, GeoLocation, PolicyName, Action' },
+            { logSource: 'Active Directory', logName: 'Account Added to Enterprise Admins', priority: 'Critical', rationale: 'Highest privilege escalation in Active Directory. Requires immediate and thorough investigation.', keyFields: 'EventID 4728, TargetUserName, GroupName, UserWhoAdded' },
+            { logSource: 'Endpoint', logName: 'Suspicious File Renaming (e.g., .exe to .txt)', priority: 'High', rationale: 'Common obfuscation technique used by malware to evade detection.', keyFields: 'FileName, OldName, NewName, ProcessName, User, Hostname' },
+            { logSource: 'Web Application Firewall (WAF)', logName: 'SQL Injection Attempt', priority: 'Critical', rationale: 'Direct attack against a web application database. Indicates a severe vulnerability exploitation attempt.', keyFields: 'ClientIP, RequestURL, HTTPMethod, AttackSignature, Payload, ActionTaken' },
+            { logSource: 'Web Application Firewall (WAF)', logName: 'Cross-Site Scripting (XSS) Attempt', priority: 'High', rationale: 'Attempt to inject malicious scripts into a web application. Can lead to session hijacking or data theft.', keyFields: 'ClientIP, RequestURL, HTTPMethod, AttackSignature, Payload, ActionTaken' },
+            { logSource: 'Cloud Platform (Storage)', logName: 'Public Access Enabled on Storage Bucket', priority: 'Critical', rationale: 'Critical misconfiguration leading to public exposure of sensitive data. Immediate remediation required.', keyFields: 'BucketName, UserIdentity, EventName, PublicAccessStatus' },
+            { logSource: 'Endpoint', logName: 'Unusual Outbound Network Connection (High Port)', priority: 'Medium', rationale: 'Could indicate C2 communication or data exfiltration to non-standard ports.', keyFields: 'ProcessName, User, Hostname, DstIP, DstPort, BytesSent' },
+            { logSource: 'Network Device', logName: 'New MAC Address Detected on Port', priority: 'Informational', rationale: 'Useful for network baselining and detecting unauthorized device connections (e.g., rogue devices).', keyFields: 'DeviceName, Port, MACAddress, VLAN, Timestamp' },
+            { logSource: 'Authentication Server', logName: 'Successful Login After Multiple Failures', priority: 'Medium', rationale: 'Indicates a potential brute-force attack that eventually succeeded. Requires review of the user account activity.', keyFields: 'UserName, SourceIP, FailedAttemptsCount, Timestamp' },
+            { logSource: 'VPN / Remote Access', logName: 'VPN Session from Tor Exit Node', priority: 'High', rationale: 'Access from a Tor exit node often indicates an attempt to obscure identity, frequently used by attackers.', keyFields: 'UserName, SourceIP, GeoLocation, TorExitNodeDetected' },
+            { logSource: 'Router', logName: 'Configuration Change Detected', priority: 'High', rationale: 'Unauthorized changes to router configurations can lead to network compromise, re-routing traffic, or denial of service.', keyFields: 'DeviceName, User, SourceIP, ConfigurationElement, OldValue, NewValue, Timestamp' },
+            { logSource: 'Router', logName: 'Failed Login Attempt', priority: 'High', rationale: 'Indicates brute-force attempts against network device management interfaces.', keyFields: 'DeviceName, User, SourceIP, Timestamp, AuthenticationMethod, Result' },
+            { logSource: 'Router', logName: 'Routing Table Modification', priority: 'Critical', rationale: 'Changes to routing tables can redirect traffic, enabling man-in-the-middle attacks or bypassing security controls.', keyFields: 'DeviceName, User, SourceIP, RouteEntry, OldRoute, NewRoute, Timestamp' },
+            { logSource: 'Switch', logName: 'Port Security Violation', priority: 'High', rationale: 'Detects unauthorized devices connecting to network ports or MAC address spoofing attempts.', keyFields: 'DeviceName, Port, MACAddress, ViolationType, ActionTaken, Timestamp' },
+            { logSource: 'Switch', logName: 'Spanning Tree Protocol (STP) Topology Change', priority: 'Medium', rationale: 'Could indicate a network loop, misconfiguration, or an attacker attempting to manipulate network topology to intercept traffic.', keyFields: 'DeviceName, Interface, ChangeReason, Timestamp' },
+            { logSource: 'Switch', logName: 'VLAN Configuration Change', priority: 'High', rationale: 'Unauthorized VLAN changes can lead to unauthorized network segmentation bypass or access to restricted resources.', keyFields: 'DeviceName, User, SourceIP, VLANID, OldConfig, NewConfig, Timestamp' },
+            { logSource: 'Access Point (AP)', logName: 'Rogue AP Detected', priority: 'Critical', rationale: 'Unauthorized access points can be used to capture wireless traffic, launch phishing attacks, or provide backdoor access to the network.', keyFields: 'AP_MAC, SSID, Channel, SignalStrength, DetectionMethod, Timestamp' },
+            { logSource: 'Access Point (AP)', logName: 'Deauthentication/Disassociation Attack', priority: 'High', rationale: 'Indicates an attacker is attempting to disrupt wireless client connections, often as a precursor to other attacks like WPA/WPA2 cracking.', keyFields: 'AP_MAC, Client_MAC, AttackType, Timestamp' },
+            { logSource: 'Access Point (AP)', logName: 'Unauthorized Client Connection Attempt', priority: 'Medium', rationale: 'Attempts by unknown devices to connect to the wireless network.', keyFields: 'AP_MAC, Client_MAC, SSID, AuthenticationMethod, Result, Timestamp' },
+            { logSource: 'Access Point (AP)', logName: 'Configuration Change', priority: 'High', rationale: 'Unauthorized changes to AP settings can weaken wireless security (e.g., open authentication, weak encryption).', keyFields: 'AP_MAC, User, SourceIP, ConfigurationItem, OldValue, NewValue, Timestamp' },
+            { logSource: 'Access Point (AP)', logName: 'Client Connected/Disconnected', priority: 'Informational', rationale: 'Useful for baselining wireless activity and identifying unusual connection patterns. High volume.', keyFields: 'AP_MAC, Client_MAC, SSID, ConnectionStatus, Timestamp, RSSI' }
+        ];
+
+        let currentSort = { key: 'priority', order: 'asc' };
+        let priorityChart, sourceChart;
+        
+        const priorityColors = {
+            'Critical': { bg: 'rgba(239, 68, 68, 0.2)', border: 'rgba(239, 68, 68, 1)' },
+            'High': { bg: 'rgba(245, 158, 11, 0.2)', border: 'rgba(245, 158, 11, 1)' },
+            'Medium': { bg: 'rgba(59, 130, 246, 0.2)', border: 'rgba(59, 130, 246, 1)' },
+            'Informational': { bg: 'rgba(34, 211, 238, 0.2)', border: 'rgba(34, 211, 238, 1)' }
+        };
+
+        const priorityOrder = { 'Critical': 1, 'High': 2, 'Medium': 3, 'Informational': 4 };
+
+        document.addEventListener('DOMContentLoaded', () => {
+            populateSourceFilter();
+            setupEventListeners();
+            render();
+        });
+
+        function setupEventListeners() {
+            document.getElementById('search-input').addEventListener('input', render);
+            document.getElementById('priority-filters').addEventListener('click', (e) => {
+                if (e.target.tagName === 'BUTTON') {
+                    // Remove active styling from previous button
+                    document.querySelector('#priority-filters button.bg-teal-600')?.classList.remove('bg-teal-600', 'text-white');
+                    // Add active styling to clicked button
+                    e.target.classList.add('bg-teal-600', 'text-white');
+                    render();
+                }
+            });
+            document.getElementById('source-filter').addEventListener('change', render);
+            document.querySelector('thead').addEventListener('click', (e) => {
+                const header = e.target.closest('.table-header-sortable');
+                if (header) {
+                    const sortKey = header.dataset.sort;
+                    if (currentSort.key === sortKey) {
+                        currentSort.order = currentSort.order === 'asc' ? 'desc' : 'asc';
+                    } else {
+                        currentSort.key = sortKey;
+                        currentSort.order = 'asc';
+                    }
+                    render();
+                }
+            });
+        }
+        
+        function populateSourceFilter() {
+            const sourceFilter = document.getElementById('source-filter');
+            // Clear existing options before populating
+            sourceFilter.innerHTML = '<option value="all">All Log Sources</option>';
+            const sources = [...new Set(logData.map(log => log.logSource))].sort();
+            sources.forEach(source => {
+                const option = document.createElement('option');
+                option.value = source;
+                option.textContent = source;
+                sourceFilter.appendChild(option);
+            });
+        }
+
+        function getFilteredData() {
+            const searchTerm = document.getElementById('search-input').value.toLowerCase();
+            const activePriority = document.querySelector('#priority-filters button.bg-teal-600').dataset.priority;
+            const activeSource = document.getElementById('source-filter').value;
+            
+            let filtered = logData.filter(log => {
+                const matchesSearch = Object.values(log).some(val => String(val).toLowerCase().includes(searchTerm));
+                const matchesPriority = activePriority === 'all' || log.priority === activePriority;
+                const matchesSource = activeSource === 'all' || log.logSource === activeSource;
+                return matchesSearch && matchesPriority && matchesSource;
+            });
+
+            return filtered;
+        }
+
+        function sortData(data) {
+            return data.sort((a, b) => {
+                let valA, valB;
+                
+                if (currentSort.key === 'priority') {
+                    valA = priorityOrder[a.priority];
+                    valB = priorityOrder[b.priority];
+                } else {
+                    valA = a[currentSort.key].toUpperCase();
+                    valB = b[currentSort.key].toUpperCase();
+                }
+
+                if (valA < valB) {
+                    return currentSort.order === 'asc' ? -1 : 1;
+                }
+                if (valA > valB) {
+                    return currentSort.order === 'asc' ? 1 : -1;
+                }
+                return 0;
+            });
+        }
+
+        function renderTable(data) {
+            const tableBody = document.getElementById('log-table-body');
+            const noResultsEl = document.getElementById('no-results');
+            tableBody.innerHTML = '';
+            
+            if (data.length === 0) {
+                noResultsEl.classList.remove('hidden');
+                return;
+            }
+            noResultsEl.classList.add('hidden');
+
+            data.forEach(log => {
+                const row = document.createElement('tr');
+                // Use the priority-specific classes directly for background and text color
+                row.className = `bg-white border-b hover:bg-slate-50 ${log.priority.toLowerCase() === 'critical' ? 'priority-critical' : ''} ${log.priority.toLowerCase() === 'high' ? 'priority-high' : ''} ${log.priority.toLowerCase() === 'medium' ? 'priority-medium' : ''} ${log.priority.toLowerCase() === 'informational' ? 'priority-informational' : ''}`;
+                row.innerHTML = `
+                    <td class="px-6 py-4 font-medium text-slate-900">${log.logSource}</td>
+                    <td class="px-6 py-4">${log.logName}</td>
+                    <td class="px-6 py-4">
+                        <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full">${log.priority}</span>
+                    </td>
+                    <td class="px-6 py-4">${log.rationale}</td>
+                    <td class="px-6 py-4 font-mono text-xs">${log.keyFields}</td>
+                `;
+                tableBody.appendChild(row);
+            });
+        }
+
+        function renderCharts(data) {
+            renderPriorityChart(data);
+            renderSourceChart(data);
+        }
+
+        function renderPriorityChart(data) {
+            const ctx = document.getElementById('priorityChart').getContext('2d');
+            const priorityCounts = data.reduce((acc, log) => {
+                acc[log.priority] = (acc[log.priority] || 0) + 1;
+                return acc;
+            }, {});
+
+            const labels = Object.keys(priorityCounts).sort((a, b) => priorityOrder[a] - priorityOrder[b]);
+            const chartData = labels.map(label => priorityCounts[label]);
+            const bgColors = labels.map(label => priorityColors[label].bg);
+            const borderColors = labels.map(label => priorityColors[label].border);
+            
+            if (priorityChart) {
+                priorityChart.data.labels = labels;
+                priorityChart.data.datasets[0].data = chartData;
+                priorityChart.data.datasets[0].backgroundColor = bgColors;
+                priorityChart.data.datasets[0].borderColor = borderColors;
+                priorityChart.update();
+            } else {
+                priorityChart = new Chart(ctx, {
+                    type: 'doughnut',
+                    data: {
+                        labels: labels,
+                        datasets: [{
+                            label: 'Log Count',
+                            data: chartData,
+                            backgroundColor: bgColors,
+                            borderColor: borderColors,
+                            borderWidth: 1
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: {
+                            legend: {
+                                position: 'top',
+                            }
+                        }
+                    }
+                });
+            }
+        }
+        
+        function renderSourceChart(data) {
+            const ctx = document.getElementById('sourceChart').getContext('2d');
+            const highImpactData = data.filter(log => ['Critical', 'High'].includes(log.priority));
+
+            const sourceCounts = highImpactData.reduce((acc, log) => {
+                acc[log.logSource] = (acc[log.logSource] || 0) + 1;
+                return acc;
+            }, {});
+            
+            const labels = Object.keys(sourceCounts).sort((a,b) => sourceCounts[b] - sourceCounts[a]);
+            const chartData = labels.map(label => sourceCounts[label]);
+
+            if (sourceChart) {
+                sourceChart.data.labels = labels;
+                sourceChart.data.datasets[0].data = chartData;
+                sourceChart.update();
+            } else {
+                sourceChart = new Chart(ctx, {
+                    type: 'bar',
+                    data: {
+                        labels: labels,
+                        datasets: [{
+                            label: 'Critical & High Priority Logs',
+                            data: chartData,
+                            backgroundColor: 'rgba(13, 148, 136, 0.4)',
+                            borderColor: 'rgba(13, 148, 136, 1)',
+                            borderWidth: 1
+                        }]
+                    },
+                    options: {
+                        indexAxis: 'y',
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: {
+                            legend: {
+                                display: false
+                            }
+                        },
+                        scales: {
+                            x: {
+                                beginAtZero: true,
+                                ticks: {
+                                    stepSize: 1
+                                }
+                            }
+                        }
+                    }
+                });
+            }
+        }
+        
+        function render() {
+            const filteredData = getFilteredData();
+            const sortedData = sortData(filteredData);
+            renderTable(sortedData);
+            renderCharts(filteredData);
+            populateSourceFilter(); // Re-populate source filter to include newly added sources
+        }
+
+    </script>
+</body>
+</html>
