@@ -7,11 +7,13 @@
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <!-- Chosen Palette: Calm Neutrals with Priority Accents -->
-    <!-- Application Structure Plan: A dashboard-centric design featuring a primary interactive table (the "Matrix") as the central element. The user flow is driven by top-level controls (filters for priority, device, and a search bar) that dynamically update both the table and accompanying summary visualizations (donut and bar charts). This structure was chosen to transform a static list into an exploratory tool. It allows professionals to immediately drill down into the data that's most relevant to their current task (e.g., "Show me all critical logs from domain controllers") rather than linearly reading a report, thus maximizing usability and speed to insight. -->
+    <!-- Application Structure Plan: A dashboard-centric design featuring a primary interactive table (the "Matrix") as the central element. The user flow is driven by top-level controls (filters for priority, device, and a search bar) that dynamically update both the table and accompanying summary visualizations (donut and bar charts). This structure was chosen to transform a static list into an exploratory tool. It allows professionals to immediately drill down into the data that's most relevant to their current task (e.g., "Show me all critical logs from domain controllers") rather than linearly reading a report, thus maximizing usability and speed to insight. A new collapsible section for the "Why Prioritize" rationale has been added to provide in-depth context without cluttering the main interactive elements. The visualization section has been updated to include a third chart showing recommended ingestion order. -->
     <!-- Visualization & Content Choices: 
         - Log Data -> Goal: Organize & Inform -> Presentation: Interactive HTML Table -> Interaction: Filter by priority/source, search, sort by columns -> Justification: Directly addresses the 'excel-like matrix' request, providing a dense, structured view that is ideal for detailed exploration. JS-powered filtering makes it dynamic.
         - Priority Distribution -> Goal: Summarize -> Presentation: Donut Chart -> Interaction: Updates based on filters -> Justification: Offers a quick, at-a- glance understanding of the log priority composition in the current filtered view. (Chart.js/Canvas)
         - Logs by Source -> Goal: Compare -> Presentation: Bar Chart -> Interaction: Updates based on filters -> Justification: Allows easy comparison of log volume/importance across different device categories, helping identify high-risk areas. (Chart.js/Canvas)
+        - SIEM Log Prioritization Rationale -> Goal: Explain & Inform -> Presentation: Collapsible Markdown-rendered HTML -> Interaction: Expand/Collapse button -> Justification: Provides crucial background and theoretical understanding of log prioritization, enhancing the educational value of the tool without being constantly visible.
+        - Recommended Ingestion Order -> Goal: Guide & Inform -> Presentation: Horizontal Bar Chart -> Interaction: Static representation of priority order -> Justification: Visually reinforces the strategic importance of ingesting critical logs first, aiding in deployment planning. (Chart.js/Canvas)
     -->
     <!-- CONFIRMATION: NO SVG graphics used. NO Mermaid JS used. -->
     <style>
@@ -51,6 +53,15 @@
             color: #9ca3af;
             font-size: 0.8em;
         }
+        .collapsible-content {
+            max-height: 0;
+            overflow: hidden;
+            transition: max-height 0.3s ease-out;
+        }
+        .collapsible-content.expanded {
+            max-height: 10000px; /* Large enough value to show all content */
+            transition: max-height 0.7s ease-in;
+        }
     </style>
      <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -70,6 +81,12 @@
             <p class="text-slate-600">
                 In any modern IT environment, security devices and systems generate a massive volume of logs. Without a clear strategy, analysts can quickly become overwhelmed, leading to "alert fatigue" and potentially missing genuine threats. This interactive matrix is designed to help you focus on the logs that matter most. Use the filters below to slice the data by priority level or log source. The interactive table and charts will update in real-time to help you identify critical events, understand their context, and determine which key data fields to monitor for effective threat detection and response.
             </p>
+            <button id="toggle-rationale" class="mt-4 px-4 py-2 text-sm font-medium rounded-md bg-slate-200 text-slate-700 shadow-sm hover:bg-slate-300 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-slate-400">
+                Read Full Rationale ▼
+            </button>
+            <div id="rationale-content" class="collapsible-content mt-4 prose max-w-none text-slate-700">
+                <!-- Rationale content will be inserted here by JavaScript -->
+            </div>
         </section>
 
         <div class="bg-white p-4 sm:p-6 rounded-lg shadow-sm mb-8">
@@ -109,7 +126,7 @@
                             <th scope="col" class="px-6 py-3 table-header-sortable" data-sort="logName">Log Name / Type</th>
                             <th scope="col" class="px-6 py-3 table-header-sortable" data-sort="priority">Priority</th>
                             <th scope="col" class="px-6 py-3">Why It's a Priority</th>
-                            <th scope="col" class="px-6 py-3">Key Fields to Monitor</th>
+                            <th scope="col" class="px-6 py-3">ECS</th>
                         </tr>
                     </thead>
                     <tbody id="log-table-body">
@@ -118,7 +135,7 @@
                  <p id="no-results" class="text-center py-8 text-slate-500 hidden">No logs match the current filters.</p>
             </div>
 
-            <section id="visualizations" class="grid grid-cols-1 lg:grid-cols-2 gap-8">
+            <section id="visualizations" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
                 <div class="bg-white p-6 rounded-lg shadow-sm">
                     <h3 class="text-xl font-semibold text-teal-700 mb-4 text-center">Log Distribution by Priority</h3>
                     <div class="chart-container">
@@ -131,6 +148,12 @@
                         <canvas id="sourceChart"></canvas>
                     </div>
                 </div>
+                <div class="bg-white p-6 rounded-lg shadow-sm">
+                    <h3 class="text-xl font-semibold text-teal-700 mb-4 text-center">Recommended Ingestion Order</h3>
+                    <div class="chart-container">
+                        <canvas id="ingestionOrderChart"></canvas>
+                    </div>
+                </div>
             </section>
         </main>
 
@@ -141,96 +164,114 @@
 
     <script>
         const logData = [
-            { logSource: 'Domain Controller', logName: 'Privileged Group Membership Change', priority: 'Critical', rationale: 'Indicates potential privilege escalation, a key step in ransomware and APT attacks. Changes to groups like Domain Admins must be investigated immediately.', keyFields: 'EventID 4728/4732/4756, TargetUserName, GroupName, UserWhoAdded' },
-            { logSource: 'EDR / Endpoint', logName: 'Ransomware / Malware Detection', priority: 'Critical', rationale: 'Direct evidence of a severe, active compromise on an endpoint. Immediate containment is required to prevent spread.', keyFields: 'AlertName, FileName, FilePath, ProcessName, Hostname, ActionTaken (Blocked/Quarantined)' },
-            { logSource: 'Firewall / NGFW', logName: 'Outbound Traffic to Known C2 Servers', priority: 'Critical', rationale: 'Strong indicator of a compromised host communicating with an attacker\'s command and control infrastructure.', keyFields: 'SrcIP, DstIP, DstPort, ThreatName, GeoLocation' },
-            { logSource: 'Cloud Platform (IAM)', logName: 'Root/Admin Account Usage or API Key Creation', priority: 'Critical', rationale: 'Usage of the highest-privileged account should be extremely rare and is a high-value target for attackers.', keyFields: 'UserIdentity, EventName, SourceIPAddress, UserAgent' },
-            { logSource: 'Domain Controller', logName: 'Multiple Account Lockouts (Single User)', priority: 'High', rationale: 'Could indicate a brute-force or password spray attack against a specific user account.', keyFields: 'EventID 4740, TargetUserName, SourceWorkstation' },
-            { logSource: 'EDR / Endpoint', logName: 'Suspicious PowerShell Execution', priority: 'High', rationale: 'PowerShell is heavily used in "living off the land" attacks for fileless malware, lateral movement, and reconnaissance.', keyFields: 'EventID 4104, ScriptBlockText, User, Hostname, CommandLine' },
-            { logSource: 'VPN / Remote Access', logName: 'Login from Unusual Geographic Location', priority: 'High', rationale: 'Sign of credential compromise, especially if the user is not traveling. Often linked to "impossible travel" alerts.', keyFields: 'UserName, SourceIP, GeoLocation, Timestamp' },
-            { logSource: 'Web Proxy', logName: 'Large Data Upload to External Site', priority: 'High', rationale: 'Potential data exfiltration. Correlate with internal data classifications to assess severity.', keyFields: 'SrcIP, DstURL, User, BytesSent, FileType' },
-            { logSource: 'Database Server', logName: 'Multiple Failed Login Attempts', priority: 'High', rationale: 'Indicates a potential attempt to brute-force access to sensitive data stores.', keyFields: 'DBUser, SourceIP, DatabaseName, ErrorCode' },
-            { logSource: 'Windows Security', logName: 'Audit Log Cleared', priority: 'High', rationale: 'Classic anti-forensics technique used by attackers to cover their tracks after a compromise.', keyFields: 'EventID 1102, User' },
-            { logSource: 'Firewall / NGFW', logName: 'Port Scan Detected', priority: 'Medium', rationale: 'Often a precursor to an attack, indicating an external or internal actor is performing reconnaissance on your network.', keyFields: 'ScannerIP, TargetIP, PortsScanned' },
-            { logSource: 'Windows Security', logName: 'New Service Installed', priority: 'Medium', rationale: 'Attackers often install malicious services for persistence. Should be correlated with change management records.', keyFields: 'EventID 4697, ServiceName, ServiceFileName, User' },
-            { logSource: 'Cloud Platform (IAM)', logName: 'Security Group / Firewall Rule Change', priority: 'Medium', rationale: 'Unauthorized changes can expose sensitive systems to the internet. Review against change requests.', keyFields: 'UserIdentity, EventName, RequestParameters (Ports, IP ranges)' },
-            { logSource: 'DNS Server', logName: 'Queries to Dynamic DNS (DDNS) Domains', priority: 'Medium', rationale: 'While sometimes legitimate, DDNS is frequently used by attackers for C2 infrastructure due to its resilience.', keyFields: 'SrcIP, QueryName, Response' },
-            { logSource: 'Windows Security', logName: 'Successful Privileged Account Logon', priority: 'Medium', rationale: 'Monitor for anomalous usage patterns (e.g., off-hours, unusual source workstation) of admin accounts.', keyFields: 'EventID 4624, LogonType, TargetUserName, IpAddress, WorkstationName' },
-            { logSource: 'Firewall / NGFW', logName: 'High Volume Denied Connections (DoS/DDoS)', priority: 'Medium', rationale: 'Indicates a potential Denial of Service (DoS) or Distributed Denial of Service (DDoS) attack attempt, even if blocked. Important for baselining and early warning.', keyFields: 'SrcIP, DstIP, DstPort, ConnectionCount, Protocol, GeoLocation' },
-            { logSource: 'Load Balancer / WAF', logName: 'Unusual Request Rate / Web Attack Signatures', priority: 'High', rationale: 'Detection of high request volumes or patterns indicative of web application attacks (e.g., SQLi, XSS, DDoS).', keyFields: 'ClientIP, RequestURL, UserAgent, HTTPMethod, ResponseCode, RequestRate, AttackType' },
-            { logSource: 'Network Flow (NetFlow/IPFIX)', logName: 'Unusual Traffic Spikes / High Connection Counts', priority: 'Medium', rationale: 'Identifies abnormal network traffic patterns that could indicate reconnaissance, data exfiltration, or early stages of a DDoS attack.', keyFields: 'SrcIP, DstIP, SrcPort, DstPort, Protocol, BytesTransferred, PacketCount, FlowDuration' },
-            { logSource: 'DNS Server', logName: 'High Volume DNS Queries from Single Source', priority: 'Medium', rationale: 'Could indicate a DNS amplification attack, reconnaissance, or a compromised host performing excessive lookups.', keyFields: 'SrcIP, QueryName, QueryCount, ResponseCode' },
-            { logSource: 'Network Device', logName: 'Interface Errors / Discards', priority: 'Informational', rationale: 'While not directly a security threat, high rates can indicate network issues, misconfigurations, or stress from high traffic (e.g., early signs of DoS impact).', keyFields: 'DeviceName, Interface, InErrors, OutErrors, InDiscards, OutDiscards, Timestamp' },
-            { logSource: 'VPN / Remote Access', logName: 'Failed Multi-Factor Authentication (MFA) Attempts', priority: 'High', rationale: 'Indicates an attacker likely has valid credentials but is failing the second factor, a critical alert for account compromise.', keyFields: 'UserName, SourceIP, MFAFailureReason, Timestamp' },
-            { logSource: 'Cloud Platform (Compute)', logName: 'New Public IP Address Assignment', priority: 'Medium', rationale: 'Monitor for unauthorized exposure of internal resources or creation of new attack surfaces in cloud environments.', keyFields: 'InstanceID, PublicIP, UserIdentity, EventTime, Region' },
-            { logSource: 'Mail Gateway', logName: 'High Volume Outbound Emails', priority: 'High', rationale: 'Potential indicator of a compromised mailbox being used for spamming, phishing, or data exfiltration.', keyFields: 'SenderEmail, RecipientCount, Subject, AttachmentInfo, BytesSent, Timestamp' },
-            { logSource: 'Mail Gateway', logName: 'Email with Malicious Attachment/Link', priority: 'Critical', rationale: 'Direct detection of a phishing attempt or malware delivery via email. Immediate user notification and email quarantine are vital.', keyFields: 'Sender, Recipient, Subject, AttachmentName, AttachmentHash, URL, ThreatType, ActionTaken' },
-            { logSource: 'Mail Gateway', logName: 'Spoofed Email Detection', priority: 'High', rationale: 'Indicates an email attempting to impersonate a legitimate sender, often used in phishing or business email compromise (BEC) attacks.', keyFields: 'Sender, Recipient, Subject, FromAddress, MailFrom, SPFResult, DKIMResult, DMARCResult' },
-            { logSource: 'Web Proxy', logName: 'Access to Phishing/Malicious URL', priority: 'High', rationale: 'User clicked on a malicious link. Indicates potential compromise or successful phishing attempt. Immediate endpoint investigation is needed.', keyFields: 'User, SourceIP, DestinationURL, Category, ActionTaken (Blocked/Allowed), Referer' },
-            { logSource: 'Security Awareness Platform', logName: 'User Reported Phishing Email', priority: 'Medium', rationale: 'Direct user feedback on a potential phishing attempt. Valuable for identifying ongoing campaigns and training effectiveness.', keyFields: 'ReportedBy, ReportedEmailSubject, ReportedEmailSender, Timestamp' },
-            { logSource: 'SIEM / SOAR', logName: 'Repeated Failed Logins (across services)', priority: 'High', rationale: 'Correlation of failed logins across multiple services for a single user, indicating a widespread credential stuffing or brute-force attack.', keyFields: 'UserName, SourceIPs, ServicesAffected, TotalFailedAttempts, TimeWindow' },
-            { logSource: 'Cloud Platform (Network)', logName: 'Large Data Transfer Outbound (Cloud Storage)', priority: 'High', rationale: 'Potential data exfiltration from cloud storage buckets or databases. Requires immediate investigation.', keyFields: 'BucketName/DBName, UserIdentity, BytesTransferred, DestinationIP, EventTime' },
-            { logSource: 'Endpoint', logName: 'New Local Administrator Account Created', priority: 'High', rationale: 'Unauthorized creation of local admin accounts can be a persistence mechanism for attackers.', keyFields: 'EventID 4720 (Windows), User, AccountName, UserWhoCreated' },
-            { logSource: 'Network Device', logName: 'Spanning Tree Protocol (STP) Topology Change', priority: 'Medium', rationale: 'Could indicate a network loop, misconfiguration, or an attacker attempting to manipulate network topology.', keyFields: 'DeviceName, Interface, ChangeReason, Timestamp' },
-            { logSource: 'Firewall / NGFW', logName: 'Geo-Blocking Policy Violation', priority: 'Medium', rationale: 'Traffic from/to a restricted geographical region. While often blocked, it warrants monitoring for persistent attempts.', keyFields: 'SrcIP, DstIP, GeoLocation, PolicyName, Action' },
-            { logSource: 'Active Directory', logName: 'Account Added to Enterprise Admins', priority: 'Critical', rationale: 'Highest privilege escalation in Active Directory. Requires immediate and thorough investigation.', keyFields: 'EventID 4728, TargetUserName, GroupName, UserWhoAdded' },
-            { logSource: 'Endpoint', logName: 'Suspicious File Renaming (e.g., .exe to .txt)', priority: 'High', rationale: 'Common obfuscation technique used by malware to evade detection.', keyFields: 'FileName, OldName, NewName, ProcessName, User, Hostname' },
-            { logSource: 'Web Application Firewall (WAF)', logName: 'SQL Injection Attempt', priority: 'Critical', rationale: 'Direct attack against a web application database. Indicates a severe vulnerability exploitation attempt.', keyFields: 'ClientIP, RequestURL, HTTPMethod, AttackSignature, Payload, ActionTaken' },
-            { logSource: 'Web Application Firewall (WAF)', logName: 'Cross-Site Scripting (XSS) Attempt', priority: 'High', rationale: 'Attempt to inject malicious scripts into a web application. Can lead to session hijacking or data theft.', keyFields: 'ClientIP, RequestURL, HTTPMethod, AttackSignature, Payload, ActionTaken' },
-            { logSource: 'Cloud Platform (Storage)', logName: 'Public Access Enabled on Storage Bucket', priority: 'Critical', rationale: 'Critical misconfiguration leading to public exposure of sensitive data. Immediate remediation required.', keyFields: 'BucketName, UserIdentity, EventName, PublicAccessStatus' },
-            { logSource: 'Endpoint', logName: 'Unusual Outbound Network Connection (High Port)', priority: 'Medium', rationale: 'Could indicate C2 communication or data exfiltration to non-standard ports.', keyFields: 'ProcessName, User, Hostname, DstIP, DstPort, BytesSent' },
-            { logSource: 'Network Device', logName: 'New MAC Address Detected on Port', priority: 'Informational', rationale: 'Useful for network baselining and detecting unauthorized device connections (e.g., rogue devices).', keyFields: 'DeviceName, Port, MACAddress, VLAN, Timestamp' },
-            { logSource: 'Authentication Server', logName: 'Successful Login After Multiple Failures', priority: 'Medium', rationale: 'Indicates a potential brute-force attack that eventually succeeded. Requires review of the user account activity.', keyFields: 'UserName, SourceIP, FailedAttemptsCount, Timestamp' },
-            { logSource: 'VPN / Remote Access', logName: 'VPN Session from Tor Exit Node', priority: 'High', rationale: 'Access from a Tor exit node often indicates an attempt to obscure identity, frequently used by attackers.', keyFields: 'UserName, SourceIP, GeoLocation, TorExitNodeDetected' },
-            { logSource: 'Router', logName: 'Configuration Change Detected', priority: 'High', rationale: 'Unauthorized changes to router configurations can lead to network compromise, re-routing traffic, or denial of service.', keyFields: 'DeviceName, User, SourceIP, ConfigurationElement, OldValue, NewValue, Timestamp' },
-            { logSource: 'Router', logName: 'Failed Login Attempt', priority: 'High', rationale: 'Indicates brute-force attempts against network device management interfaces.', keyFields: 'DeviceName, User, SourceIP, Timestamp, AuthenticationMethod, Result' },
-            { logSource: 'Router', logName: 'Routing Table Modification', priority: 'Critical', rationale: 'Changes to routing tables can redirect traffic, enabling man-in-the-middle attacks or bypassing security controls.', keyFields: 'DeviceName, User, SourceIP, RouteEntry, OldRoute, NewRoute, Timestamp' },
-            { logSource: 'Switch', logName: 'Port Security Violation', priority: 'High', rationale: 'Detects unauthorized devices connecting to network ports or MAC address spoofing attempts.', keyFields: 'DeviceName, Port, MACAddress, ViolationType, ActionTaken, Timestamp' },
-            { logSource: 'Switch', logName: 'Spanning Tree Protocol (STP) Topology Change', priority: 'Medium', rationale: 'Could indicate a network loop, misconfiguration, or an attacker attempting to manipulate network topology to intercept traffic.', keyFields: 'DeviceName, Interface, ChangeReason, Timestamp' },
-            { logSource: 'Switch', logName: 'VLAN Configuration Change', priority: 'High', rationale: 'Unauthorized VLAN changes can lead to unauthorized network segmentation bypass or access to restricted resources.', keyFields: 'DeviceName, User, SourceIP, VLANID, OldConfig, NewConfig, Timestamp' },
-            { logSource: 'Access Point (AP)', logName: 'Rogue AP Detected', priority: 'Critical', rationale: 'Unauthorized access points can be used to capture wireless traffic, launch phishing attacks, or provide backdoor access to the network.', keyFields: 'AP_MAC, SSID, Channel, SignalStrength, DetectionMethod, Timestamp' },
-            { logSource: 'Access Point (AP)', logName: 'Deauthentication/Disassociation Attack', priority: 'High', rationale: 'Indicates an attacker is attempting to disrupt wireless client connections, often as a precursor to other attacks like WPA/WPA2 cracking.', keyFields: 'AP_MAC, Client_MAC, AttackType, Timestamp' },
-            { logSource: 'Access Point (AP)', logName: 'Unauthorized Client Connection Attempt', priority: 'Medium', rationale: 'Attempts by unknown devices to connect to the wireless network.', keyFields: 'AP_MAC, Client_MAC, SSID, AuthenticationMethod, Result, Timestamp' },
-            { logSource: 'Access Point (AP)', logName: 'Configuration Change', priority: 'High', rationale: 'Unauthorized changes to AP settings can weaken wireless security (e.g., open authentication, weak encryption).', keyFields: 'AP_MAC, User, SourceIP, ConfigurationItem, OldValue, NewValue, Timestamp' },
-            { logSource: 'Access Point (AP)', logName: 'Client Connected/Disconnected', priority: 'Informational', rationale: 'Useful for baselining wireless activity and identifying unusual connection patterns. High volume.', keyFields: 'AP_MAC, Client_MAC, SSID, ConnectionStatus, Timestamp, RSSI' },
+            { logSource: 'Domain Controller', logName: 'Privileged Group Membership Change', priority: 'Critical', rationale: 'Indicates potential privilege escalation, a key step in ransomware and APT attacks. Changes to groups like Domain Admins must be investigated immediately.', ECS: 'winlog.event_id: 4728/4732/4756, user.name, group.name, user.who_added, @timestamp' },
+            { logSource: 'EDR / Endpoint', logName: 'Ransomware / Malware Detection', priority: 'Critical', rationale: 'Direct evidence of a severe, active compromise on an endpoint. Immediate containment is required to prevent spread.', ECS: 'alert.name, file.path, process.executable, host.name, action.taken, file.hash.md5, user.name, @timestamp' },
+            { logSource: 'Firewall / NGFW', logName: 'Outbound Traffic to Known C2 Servers', priority: 'Critical', rationale: 'Strong indicator of a compromised host communicating with an attacker\'s command and control infrastructure.', ECS: 'source.ip, destination.ip, destination.port, threat.name, destination.geo.location, network.protocol, network.bytes, @timestamp' },
+            { logSource: 'Cloud Platform (IAM)', logName: 'Root/Admin Account Usage or API Key Creation', priority: 'Critical', rationale: 'Usage of the highest-privileged account should be extremely rare and is a high-value target for attackers.', ECS: 'user.id, event.action, source.ip, user_agent.original, http.request.body.content, @timestamp' },
+            { logSource: 'Domain Controller', logName: 'Multiple Account Lockouts (Single User)', priority: 'High', rationale: 'Could indicate a brute-force or password spray attack against a specific user account.', ECS: 'winlog.event_id: 4740, user.name, source.address, source.ip, @timestamp' },
+            { logSource: 'EDR / Endpoint', logName: 'Suspicious PowerShell Execution', priority: 'High', rationale: 'PowerShell is heavily used in "living off the land" attacks for fileless malware, lateral movement, and reconnaissance.', ECS: 'winlog.event_id: 4104, powershell.script_block_text, user.name, host.name, process.command_line, process.pid, process.parent.pid, @timestamp' },
+            { logSource: 'VPN / Remote Access', logName: 'Login from Unusual Geographic Location', priority: 'High', rationale: 'Sign of credential compromise, especially if the user is not traveling. Often linked to "impossible travel" alerts.', ECS: 'user.name, source.ip, source.geo.location, @timestamp, vpn.client.version, authentication.method, authentication.result' },
+            { logSource: 'Web Proxy', logName: 'Large Data Upload to External Site', priority: 'High', rationale: 'Potential data exfiltration. Correlate with internal data classifications to assess severity.', ECS: 'source.ip, url.full, user.name, http.response.body.bytes, file.extension, http.request.method, http.request.referrer, @timestamp' },
+            { logSource: 'Database Server', logName: 'Multiple Failed Login Attempts', priority: 'High', rationale: 'Indicates a potential attempt to brute-force access to sensitive data stores.', ECS: 'user.name, source.ip, database.name, error.code, @timestamp, authentication.method' },
+            { logSource: 'Windows Security', logName: 'Audit Log Cleared', priority: 'High', rationale: 'Classic anti-forensics technique used by attackers to cover their tracks after a compromise.', ECS: 'winlog.event_id: 1102, user.name, @timestamp, winlog.channel' },
+            { logSource: 'Firewall / NGFW', logName: 'Port Scan Detected', priority: 'Medium', rationale: 'Often a precursor to an attack, indicating an external or internal actor is performing reconnaissance on your network.', ECS: 'source.ip, destination.ip, network.direction: ingress/egress, network.port, network.protocol, @timestamp, action.outcome' },
+            { logSource: 'Windows Security', logName: 'New Service Installed', priority: 'Medium', rationale: 'Attackers often install malicious services for persistence. Should be correlated with change management records.', ECS: 'winlog.event_id: 4697, service.name, service.path, user.name, @timestamp, service.start_type' },
+            { logSource: 'Cloud Platform (IAM)', logName: 'Security Group / Firewall Rule Change', priority: 'Medium', rationale: 'Unauthorized changes can expose sensitive systems to the internet. Review against change requests.', ECS: 'user.id, event.action, http.request.body.content (e.g., ports, ip_ranges), source.ip, @timestamp' },
+            { logSource: 'DNS Server', logName: 'Queries to Dynamic DNS (DDNS) Domains', priority: 'Medium', rationale: 'While sometimes legitimate, DDNS is frequently used by attackers for C2 infrastructure due to its resilience.', ECS: 'source.ip, dns.question.name, dns.response_code, dns.question.type, @timestamp' },
+            { logSource: 'Windows Security', logName: 'Successful Privileged Account Logon', priority: 'Medium', rationale: 'Monitor for anomalous usage patterns (e.g., off-hours, unusual source workstation) of admin accounts.', ECS: 'winlog.event_id: 4624, user.name, winlog.logon.type, source.ip, source.hostname, authentication.package, @timestamp' },
+            { logSource: 'Firewall / NGFW', logName: 'High Volume Denied Connections (DoS/DDoS)', priority: 'Medium', rationale: 'Indicates a potential Denial of Service (DoS) or Distributed Denial of Service (DDoS) attack attempt, even if blocked. Important for baselining and early warning.', ECS: 'source.ip, destination.ip, destination.port, network.connection_count, network.protocol, destination.geo.location, @timestamp, action.outcome' },
+            { logSource: 'Load Balancer / WAF', logName: 'Unusual Request Rate / Web Attack Signatures', priority: 'High', rationale: 'Detection of high request volumes or patterns indicative of web application attacks (e.g., SQLi, XSS, DDoS).', ECS: 'source.ip, url.full, user_agent.original, http.request.method, http.response.status_code, http.request.rate, attack.type, action.outcome, @timestamp' },
+            { logSource: 'Network Flow (NetFlow/IPFIX)', logName: 'Unusual Traffic Spikes / High Connection Counts', priority: 'Medium', rationale: 'Identifies abnormal network traffic patterns that could indicate reconnaissance, data exfiltration, or early stages of a DDoS attack.', ECS: 'source.ip, destination.ip, source.port, destination.port, network.protocol, network.bytes, network.packets, network.duration, @timestamp' },
+            { logSource: 'DNS Server', logName: 'High Volume DNS Queries from Single Source', priority: 'Medium', rationale: 'Could indicate a DNS amplification attack, reconnaissance, or a compromised host performing excessive lookups.', ECS: 'source.ip, dns.question.name, dns.query_count, dns.response_code, @timestamp' },
+            { logSource: 'Network Device', logName: 'Interface Errors / Discards', priority: 'Informational', rationale: 'While not directly a security threat, high rates can indicate network issues, misconfigurations, or stress from high traffic (e.g., early signs of DoS impact).', ECS: 'device.name, network.interface.name, network.errors.in, network.errors.out, network.packets.dropped.in, network.packets.dropped.out, @timestamp' },
+            { logSource: 'VPN / Remote Access', logName: 'Failed Multi-Factor Authentication (MFA) Attempts', priority: 'High', rationale: 'Indicates an attacker likely has valid credentials but is failing the second factor, a critical alert for account compromise.', ECS: 'user.name, source.ip, authentication.mfa.failure_reason, @timestamp, authentication.method' },
+            { logSource: 'Cloud Platform (Compute)', logName: 'New Public IP Address Assignment', priority: 'Medium', rationale: 'Monitor for unauthorized exposure of internal resources or creation of new attack surfaces in cloud environments.', ECS: 'cloud.instance.id, cloud.public_ip, user.id, @timestamp, cloud.region, source.ip' },
+            { logSource: 'Mail Gateway', logName: 'High Volume Outbound Emails', priority: 'High', rationale: 'Potential indicator of a compromised mailbox being used for spam, phishing, or data exfiltration.', ECS: 'email.from.address, email.to.count, email.subject, email.attachment.info, email.bytes, @timestamp, threat.category' },
+            { logSource: 'Mail Gateway', logName: 'Email with Malicious Attachment/Link', priority: 'Critical', rationale: 'Direct detection of a phishing attempt or malware delivery via email. Immediate user notification and email quarantine are vital.', ECS: 'email.from.address, email.to.address, email.subject, file.name, file.hash.md5, url.full, threat.type, action.outcome, @timestamp, email.id' },
+            { logSource: 'Mail Gateway', logName: 'Spoofed Email Detection', priority: 'High', rationale: 'Indicates an email attempting to impersonate a legitimate sender, often used in phishing or business email compromise (BEC) attacks.', ECS: 'email.from.address, email.to.address, email.subject, email.headers.from, email.headers.mail_from, email.spf.result, email.dkim.result, email.dmarc.result, @timestamp' },
+            { logSource: 'Web Proxy', logName: 'Access to Phishing/Malicious URL', priority: 'High', rationale: 'User clicked on a malicious link. Indicates potential compromise or successful phishing attempt. Immediate endpoint investigation is needed.', ECS: 'user.name, source.ip, url.full, url.category, action.outcome, http.request.referrer, @timestamp' },
+            { logSource: 'Security Awareness Platform', logName: 'User Reported Phishing Email', priority: 'Medium', rationale: 'Direct user feedback on a potential phishing attempt. Valuable for identifying ongoing campaigns and training effectiveness.', ECS: 'user.name, email.subject, email.from.address, @timestamp, email.id' },
+            { logSource: 'SIEM / SOAR', logName: 'Repeated Failed Logins (across services)', priority: 'High', rationale: 'Correlation of failed logins across multiple services for a single user, indicating a widespread credential stuffing or brute-force attack.', ECS: 'user.name, source.ip, service.name, authentication.failed_attempts, time.window, @timestamp' },
+            { logSource: 'Cloud Platform (Network)', logName: 'Large Data Transfer Outbound (Cloud Storage)', priority: 'High', rationale: 'Potential data exfiltration from cloud storage buckets or databases. Requires immediate investigation.', ECS: 'cloud.bucket.name/database.name, user.id, network.bytes, destination.ip, @timestamp, source.ip' },
+            { logSource: 'Endpoint', logName: 'New Local Administrator Account Created', priority: 'High', rationale: 'Unauthorized creation of local admin accounts can be a persistence mechanism for attackers.', ECS: 'winlog.event_id: 4720, user.name, account.name, user.who_created, @timestamp' },
+            { logSource: 'Network Device', logName: 'Spanning Tree Protocol (STP) Topology Change', priority: 'Medium', rationale: 'Could indicate a network loop, misconfiguration, or an attacker attempting to manipulate network topology.', ECS: 'device.name, network.interface.name, network.change_reason, @timestamp' },
+            { logSource: 'Firewall / NGFW', logName: 'Geo-Blocking Policy Violation', priority: 'Medium', rationale: 'Traffic from/to a restricted geographical region. While often blocked, it warrants monitoring for persistent attempts.', ECS: 'source.ip, destination.ip, destination.geo.location, policy.name, action.outcome, @timestamp' },
+            { logSource: 'Active Directory', logName: 'Account Added to Enterprise Admins', priority: 'Critical', rationale: 'Highest privilege escalation in Active Directory. Requires immediate and thorough investigation.', ECS: 'winlog.event_id: 4728, user.name, group.name, user.who_added, @timestamp' },
+            { logSource: 'Endpoint', logName: 'Suspicious File Renaming (e.g., .exe to .txt)', priority: 'High', rationale: 'Common obfuscation technique used by malware to evade detection.', ECS: 'file.name, file.old_name, file.new_name, process.executable, user.name, host.name, @timestamp' },
+            { logSource: 'Web Application Firewall (WAF)', logName: 'SQL Injection Attempt', priority: 'Critical', rationale: 'Direct attack against a web application database. Indicates a severe vulnerability exploitation attempt.', ECS: 'source.ip, url.full, http.request.method, attack.signature, http.request.body.content, action.outcome, @timestamp' },
+            { logSource: 'Web Application Firewall (WAF)', logName: 'Cross-Site Scripting (XSS) Attempt', priority: 'High', rationale: 'Attempt to inject malicious scripts into a web application. Can lead to session hijacking or data theft.', ECS: 'source.ip, url.full, http.request.method, attack.signature, http.request.body.content, action.outcome, @timestamp' },
+            { logSource: 'Cloud Platform (Storage)', logName: 'Public Access Enabled on Storage Bucket', priority: 'Critical', rationale: 'Critical misconfiguration leading to public exposure of sensitive data. Immediate remediation required.', ECS: 'cloud.bucket.name, user.id, event.action, cloud.storage.public_access_status, @timestamp, source.ip' },
+            { logSource: 'Endpoint', logName: 'Unusual Outbound Network Connection (High Port)', priority: 'Medium', rationale: 'Could indicate C2 communication or data exfiltration to non-standard ports.', ECS: 'process.executable, user.name, host.name, destination.ip, destination.port, network.bytes, network.protocol, @timestamp' },
+            { logSource: 'Network Device', logName: 'New MAC Address Detected on Port', priority: 'Informational', rationale: 'Useful for network baselining and detecting unauthorized device connections (e.g., rogue devices).', ECS: 'device.name, network.interface.name, mac.address, network.vlan.id, @timestamp' },
+            { logSource: 'Authentication Server', logName: 'Successful Login After Multiple Failures', priority: 'Medium', rationale: 'Indicates a potential brute-force attack that eventually succeeded. Requires review of the user account activity.', ECS: 'user.name, source.ip, authentication.failed_attempts, @timestamp' },
+            { logSource: 'VPN / Remote Access', logName: 'VPN Session from Tor Exit Node', priority: 'High', rationale: 'Access from a Tor exit node often indicates an attempt to obscure identity, frequently used by attackers.', ECS: 'user.name, source.ip, source.geo.location, network.tor.exit_node, @timestamp' },
+            { logSource: 'Router', logName: 'Configuration Change Detected', priority: 'High', rationale: 'Unauthorized changes to router configurations can lead to network compromise, re-routing traffic, or denial of service.', ECS: 'device.name, user.name, source.ip, configuration.element, configuration.old_value, configuration.new_value, @timestamp' },
+            { logSource: 'Router', logName: 'Failed Login Attempt', priority: 'High', rationale: 'Indicates brute-force attempts against network device management interfaces.', ECS: 'device.name, user.name, source.ip, @timestamp, authentication.method, authentication.result' },
+            { logSource: 'Router', logName: 'Routing Table Modification', priority: 'Critical', rationale: 'Changes to routing tables can redirect traffic, enabling man-in-the-middle attacks or bypassing security controls.', ECS: 'device.name, user.name, source.ip, network.route.entry, network.route.old_route, network.route.new_route, @timestamp' },
+            { logSource: 'Switch', logName: 'Port Security Violation', priority: 'High', rationale: 'Detects unauthorized devices connecting to network ports or MAC address spoofing attempts.', ECS: 'device.name, network.interface.name, mac.address, network.violation.type, action.outcome, @timestamp' },
+            { logSource: 'Switch', logName: 'Spanning Tree Protocol (STP) Topology Change', priority: 'Medium', rationale: 'Could indicate a network loop, misconfiguration, or an attacker attempting to manipulate network topology to intercept traffic.', ECS: 'device.name, network.interface.name, network.change_reason, @timestamp' },
+            { logSource: 'Switch', logName: 'VLAN Configuration Change', priority: 'High', rationale: 'Unauthorized VLAN changes can lead to unauthorized network segmentation bypass or access to restricted resources.', ECS: 'device.name, user.name, source.ip, network.vlan.id, configuration.old_value, configuration.new_value, @timestamp' },
+            { logSource: 'Access Point (AP)', logName: 'Rogue AP Detected', priority: 'Critical', rationale: 'Unauthorized access points can be used to capture wireless traffic, launch phishing attacks, or provide backdoor access to the network.', ECS: 'wireless.ap.mac, wireless.ssid, network.channel, wireless.signal_strength, detection.method, @timestamp' },
+            { logSource: 'Access Point (AP)', logName: 'Deauthentication/Disassociation Attack', priority: 'High', rationale: 'Indicates an attacker is attempting to disrupt wireless client connections, often as a precursor to other attacks like WPA/WPA2 cracking.', ECS: 'wireless.ap.mac, client.mac, attack.type, @timestamp' },
+            { logSource: 'Access Point (AP)', logName: 'Unauthorized Client Connection Attempt', priority: 'Medium', rationale: 'Attempts by unknown devices to connect to the wireless network.', ECS: 'wireless.ap.mac, client.mac, wireless.ssid, authentication.method, authentication.result, @timestamp' },
+            { logSource: 'Access Point (AP)', logName: 'Configuration Change', priority: 'High', rationale: 'Unauthorized changes to AP settings can weaken wireless security (e.g., open authentication, weak encryption).', ECS: 'wireless.ap.mac, user.name, source.ip, configuration.item, configuration.old_value, configuration.new_value, @timestamp' },
+            { logSource: 'Access Point (AP)', logName: 'Client Connected/Disconnected', priority: 'Informational', rationale: 'Useful for baselining wireless activity and identifying unusual connection patterns. High volume.', ECS: 'wireless.ap.mac, client.mac, wireless.ssid, network.connection_status, @timestamp, wireless.rssi' },
             
-            // New Logs for Azure AD, SharePoint, Intune, Teams, Email
-            { logSource: 'Azure Active Directory', logName: 'User Account Created/Deleted', priority: 'Critical', rationale: 'Detects unauthorized user provisioning or de-provisioning, indicating potential insider threat or account compromise.', keyFields: 'Activity (Add/Delete User), Actor, Target User, IP Address, Timestamp' },
-            { logSource: 'Azure Active Directory', logName: 'Role Assignment Change', priority: 'Critical', rationale: 'Changes to administrative roles (e.g., Global Admin) can lead to widespread compromise. Immediate investigation required.', keyFields: 'Activity (Add/Remove Role), Actor, Target User/Group, Role Name, IP Address, Timestamp' },
-            { logSource: 'Azure Active Directory', logName: 'Application Consent Grant', priority: 'High', rationale: 'Malicious applications can be granted permissions to access user data. Monitor for unusual consent grants.', keyFields: 'Activity (Consent to Application), Actor, Application Name, Permissions Granted, IP Address, Timestamp' },
-            { logSource: 'Azure Active Directory', logName: 'Risky Sign-in Detected', priority: 'Critical', rationale: 'Identifies sign-ins from unusual locations, impossible travel, or infected devices, indicating potential credential compromise.', keyFields: 'User, IP Address, Location, Risk Level, Risk State, Sign-in Status, Device Info, Timestamp' },
-            { logSource: 'Azure Active Directory', logName: 'User Password Reset', priority: 'High', rationale: 'Monitor for unauthorized password resets, especially for privileged accounts, which can lead to account takeover.', keyFields: 'Activity (Reset Password), Actor, Target User, IP Address, Timestamp' },
-            { logSource: 'Azure Active Directory', logName: 'MFA Registration/Reset', priority: 'High', rationale: 'Changes to MFA methods can bypass security controls. Monitor for unauthorized MFA changes.', keyFields: 'Activity (MFA Registered/Reset), Actor, Target User, MFA Method, IP Address, Timestamp' },
+            // Microsoft Azure AD Logs
+            { logSource: 'Azure Active Directory', logName: 'User Account Created/Deleted', priority: 'Critical', rationale: 'Detects unauthorized user provisioning or de-provisioning, indicating potential insider threat or account compromise.', ECS: 'event.action, actor.name, user.name, source.ip, @timestamp, operation.type, event.outcome' },
+            { logSource: 'Azure Active Directory', logName: 'Role Assignment Change', priority: 'Critical', rationale: 'Changes to administrative roles (e.g., Global Admin) can lead to widespread compromise. Immediate investigation required.', ECS: 'event.action, actor.name, user.name/group.name, azure.ad.role.name, source.ip, @timestamp, event.outcome' },
+            { logSource: 'Azure Active Directory', logName: 'Application Consent Grant', priority: 'High', rationale: 'Malicious applications can be granted permissions to access user data. Monitor for unusual consent grants.', ECS: 'event.action, actor.name, application.name, application.permissions, source.ip, @timestamp, event.outcome' },
+            { logSource: 'Azure Active Directory', logName: 'Risky Sign-in Detected', priority: 'Critical', rationale: 'Identifies sign-ins from unusual locations, impossible travel, or infected devices, indicating potential credential compromise.', ECS: 'user.name, source.ip, source.geo.location, risk.level, risk.state, authentication.result, device.info, @timestamp, correlation.id, authentication.details' },
+            { logSource: 'Azure Active Directory', logName: 'User Password Reset', priority: 'High', rationale: 'Monitor for unauthorized password resets, especially for privileged accounts, which can lead to account takeover.', ECS: 'event.action, actor.name, user.name, source.ip, @timestamp, event.outcome' },
+            { logSource: 'Azure Active Directory', logName: 'MFA Registration/Reset', priority: 'High', rationale: 'Changes to MFA methods can bypass security controls. Monitor for unauthorized MFA changes.', ECS: 'event.action, actor.name, user.name, authentication.mfa.method, source.ip, @timestamp, event.outcome' },
+            { logSource: 'Azure Active Directory', logName: 'Conditional Access Policy Violation', priority: 'High', rationale: 'Indicates an attempt to bypass or a failure to meet Conditional Access requirements, potentially unauthorized access.', ECS: 'user.name, source.ip, azure.conditional_access.policy.name, azure.conditional_access.grant_controls, azure.conditional_access.session_controls, event.outcome, @timestamp' },
+            { logSource: 'Azure Active Directory', logName: 'Service Principal Credential Change', priority: 'Critical', rationale: 'Changes to application or service principal credentials can lead to unauthorized access to Azure resources.', ECS: 'event.action, actor.name, azure.service_principal.name, azure.credential.type, @timestamp, event.outcome' },
+            { logSource: 'Azure Active Directory', logName: 'Guest User Invitation/Redemption', priority: 'Medium', rationale: 'Monitor for unusual guest account activity, which can expand the attack surface.', ECS: 'event.action, actor.name, user.email, @timestamp, event.outcome' },
 
-            { logSource: 'SharePoint Online', logName: 'External Sharing Enabled/Disabled', priority: 'Critical', rationale: 'Changes to external sharing settings can expose sensitive data outside the organization.', keyFields: 'User, Site/File Name, Old Value, New Value, IP Address, Timestamp' },
-            { logSource: 'SharePoint Online', logName: 'File/Folder Shared Externally', priority: 'High', rationale: 'Detects sensitive data being shared with external parties. Requires review for data exfiltration or policy violation.', keyFields: 'User, File/Folder Name, Shared With (User/Domain), Sharing Type (Link/Direct), IP Address, Timestamp' },
-            { logSource: 'SharePoint Online', logName: 'Site/List Permission Change', priority: 'High', rationale: 'Unauthorized changes to permissions can lead to data access bypass or privilege escalation.', keyFields: 'User, Site/List Name, Item ID, Old Permissions, New Permissions, IP Address, Timestamp' },
-            { logSource: 'SharePoint Online', logName: 'Sensitive File Access/Deletion', priority: 'Medium', rationale: 'Monitor access or deletion of highly classified documents. Useful for insider threat detection.', keyFields: 'User, File Name, Action (Access/Delete), IP Address, Timestamp' },
+            // SharePoint Online Logs
+            { logSource: 'SharePoint Online', logName: 'External Sharing Enabled/Disabled', priority: 'Critical', rationale: 'Changes to external sharing settings can expose sensitive data outside the organization.', ECS: 'user.name, sharepoint.site.name/file.name, old_value, new_value, source.ip, @timestamp, event.outcome' },
+            { logSource: 'SharePoint Online', logName: 'File/Folder Shared Externally', priority: 'High', rationale: 'Detects sensitive data being shared with external parties. Requires review for data exfiltration or policy violation.', ECS: 'user.name, file.name, sharepoint.shared_with, sharepoint.sharing_type, source.ip, @timestamp, event.outcome' },
+            { logSource: 'SharePoint Online', logName: 'Site/List Permission Change', priority: 'High', rationale: 'Unauthorized changes to permissions can lead to data access bypass or privilege escalation.', ECS: 'user.name, sharepoint.site.name/list.name, sharepoint.item.id, old_permissions, new_permissions, source.ip, @timestamp, event.outcome' },
+            { logSource: 'SharePoint Online', logName: 'Sensitive File Access/Deletion', priority: 'Medium', rationale: 'Monitor access or deletion of highly classified documents. Useful for insider threat detection.', ECS: 'user.name, file.name, event.action (access/delete), source.ip, @timestamp, file.sensitivity_label' },
+            { logSource: 'SharePoint Online', logName: 'File Download/Sync', priority: 'Medium', rationale: 'High volume or unusual downloads/syncs of sensitive files could indicate data exfiltration.', ECS: 'user.name, file.name, event.action (download/sync), source.ip, @timestamp, host.name' },
+            { logSource: 'SharePoint Online', logName: 'Site Collection Administrator Added/Removed', priority: 'Critical', rationale: 'Changes to top-level site administrators can grant extensive control over data.', ECS: 'user.name, sharepoint.site_collection.url, event.action (add/remove_admin), target.user.name, @timestamp' },
 
-            { logSource: 'Microsoft Intune', logName: 'Device Enrollment/Unenrollment', priority: 'High', rationale: 'Detects unauthorized device enrollment or removal, indicating potential rogue device introduction or device theft.', keyFields: 'User, Device ID, Device Type, OS, Enrollment Status, IP Address, Timestamp' },
-            { logSource: 'Microsoft Intune', logName: 'Compliance Policy Violation', priority: 'High', rationale: 'Indicates a device is out of compliance (e.g., jailbroken, missing encryption), posing a security risk.', keyFields: 'Device ID, User, Policy Name, Violation Reason, Compliance Status, Timestamp' },
-            { logSource: 'Microsoft Intune', logName: 'Application Deployment/Removal', priority: 'Medium', rationale: 'Monitor for unauthorized application installations or removals on managed devices.', keyFields: 'User, Device ID, Application Name, Action (Install/Remove), Status, Timestamp' },
-            { logSource: 'Microsoft Intune', logName: 'Remote Wipe/Lock Initiated', priority: 'High', rationale: 'Critical action on a device, requires verification of legitimacy (e.g., lost/stolen device).', keyFields: 'User, Device ID, Action (Wipe/Lock), Status, Timestamp' },
+            // Microsoft Intune Logs
+            { logSource: 'Microsoft Intune', logName: 'Device Enrollment/Unenrollment', priority: 'High', rationale: 'Detects unauthorized device enrollment or removal, indicating potential rogue device introduction or device theft.', ECS: 'user.name, device.id, device.type, os.name, intune.enrollment.status, source.ip, @timestamp, event.outcome' },
+            { logSource: 'Microsoft Intune', logName: 'Compliance Policy Violation', priority: 'High', rationale: 'Indicates a device is out of compliance (e.g., jailbroken, missing encryption), posing a security risk.', ECS: 'device.id, user.name, intune.policy.name, intune.violation.reason, intune.compliance.status, @timestamp' },
+            { logSource: 'Microsoft Intune', logName: 'Application Deployment/Removal', priority: 'Medium', rationale: 'Monitor for unauthorized application installations or removals on managed devices.', ECS: 'user.name, device.id, application.name, event.action (install/remove), event.outcome, @timestamp' },
+            { logSource: 'Microsoft Intune', logName: 'Remote Wipe/Lock Initiated', priority: 'High', rationale: 'Critical action on a device, requires verification of legitimacy (e.g., lost/stolen device).', ECS: 'user.name, device.id, event.action (wipe/lock), event.outcome, @timestamp, actor.name' },
+            { logSource: 'Microsoft Intune', logName: 'Device Configuration Profile Change', priority: 'High', rationale: 'Unauthorized changes to device configurations can weaken security settings (e.g., password policies, encryption).', ECS: 'user.name, intune.profile.name, device.id, old_value, new_value, @timestamp' },
+            { logSource: 'Microsoft Intune', logName: 'App Protection Policy Violation', priority: 'Medium', rationale: 'Identifies non-compliant usage of corporate applications on personal devices.', ECS: 'user.name, device.id, application.name, intune.policy.name, intune.violation.reason, @timestamp' },
 
-            { logSource: 'Microsoft Teams', logName: 'External User Added to Team/Channel', priority: 'High', rationale: 'Monitor for unauthorized external collaboration, which could lead to data leakage.', keyFields: 'User, Team/Channel Name, External User, Role, IP Address, Timestamp' },
-            { logSource: 'Microsoft Teams', logName: 'Sensitive File Shared', priority: 'Medium', rationale: 'Detects sharing of classified documents within Teams, useful for data governance and insider threat.', keyFields: 'User, File Name, Team/Channel Name, Shared With, Timestamp' },
-            { logSource: 'Microsoft Teams', logName: 'Guest User Login', priority: 'Medium', rationale: 'Monitor guest user activity for unusual patterns or unauthorized access attempts.', keyFields: 'Guest User, Team/Channel Name, IP Address, Timestamp' },
-            { logSource: 'Microsoft Teams', logName: 'Team/Channel Deletion', priority: 'Medium', rationale: 'Deletion of collaboration spaces might indicate data destruction or malicious activity.', keyFields: 'User, Team/Channel Name, Timestamp' },
+            // Microsoft Teams Logs
+            { logSource: 'Microsoft Teams', logName: 'External User Added to Team/Channel', priority: 'High', rationale: 'Monitor for unauthorized external collaboration, which could lead to data leakage.', ECS: 'user.name, teams.team.name, teams.channel.name, teams.external_user, teams.user.role, source.ip, @timestamp, event.outcome' },
+            { logSource: 'Microsoft Teams', logName: 'Sensitive File Shared', priority: 'Medium', rationale: 'Detects sharing of classified documents within Teams, useful for data governance and insider threat.', ECS: 'user.name, file.name, teams.team.name, teams.channel.name, teams.shared_with, @timestamp, file.sensitivity_label' },
+            { logSource: 'Microsoft Teams', logName: 'Guest User Login', priority: 'Medium', rationale: 'Monitor guest user activity for unusual patterns or unauthorized access attempts.', ECS: 'user.name, teams.team.name, teams.channel.name, source.ip, @timestamp, device.info' },
+            { logSource: 'Microsoft Teams', logName: 'Team/Channel Deletion', priority: 'Medium', rationale: 'Deletion of collaboration spaces might indicate data destruction or malicious activity.', ECS: 'user.name, teams.team.name, teams.channel.name, @timestamp, event.outcome' },
+            { logSource: 'Microsoft Teams', logName: 'Meeting/Call Started by External User', priority: 'Informational', rationale: 'Baseline for external meeting activity. Can be elevated if correlated with other suspicious events.', ECS: 'teams.meeting.organizer, teams.meeting.participants, teams.meeting.id, teams.meeting.start_time, teams.meeting.end_time, teams.meeting.is_external, @timestamp' },
+            { logSource: 'Microsoft Teams', logName: 'App Installation/Uninstallation', priority: 'Informational', rationale: 'Monitor for unauthorized or suspicious Teams app deployments.', ECS: 'user.name, application.name, event.action (install/uninstall), teams.team.name, teams.channel.name, @timestamp' },
 
-            { logSource: 'Exchange Online', logName: 'Non-Owner Mailbox Access', priority: 'Critical', rationale: 'Indicates potential compromise of a mailbox or unauthorized access by an insider.', keyFields: 'AccessedBy (User), MailboxOwner, Operation (e.g., SoftDelete, HardDelete, MailItemsAccessed), IP Address, Timestamp' },
-            { logSource: 'Exchange Online', logName: 'Mailbox Forwarding Rule Created', priority: 'High', rationale: 'Often used by attackers for persistent access and data exfiltration from compromised mailboxes.', keyFields: 'User, Rule Name, Forwarding Address, IP Address, Timestamp' },
-            { logSource: 'Exchange Online', logName: 'Anti-Malware/Anti-Phishing Detection', priority: 'Critical', rationale: 'Direct detection of malicious emails attempting to enter or leave the organization.', keyFields: 'Sender, Recipient, Subject, Threat Type, Action Taken, Message ID, Timestamp' },
-            { logSource: 'Exchange Online', logName: 'Unusual Email Send Volume', priority: 'High', rationale: 'Could indicate a compromised mailbox being used for spam, phishing, or data exfiltration campaigns.', keyFields: 'Sender, Recipient Count, Subject, Bytes Sent, IP Address, Timestamp, Anomaly Threshold' },
-            { logSource: 'Exchange Online', logName: 'Mailbox Permission Change', priority: 'High', rationale: 'Unauthorized changes to mailbox permissions can grant access to sensitive email data.', keyFields: 'User, Mailbox Name, Permission Changed, Old Value, New Value, IP Address, Timestamp' },
+            // Exchange Online (Email) Logs
+            { logSource: 'Exchange Online', logName: 'Non-Owner Mailbox Access', priority: 'Critical', rationale: 'Indicates potential compromise of a mailbox or unauthorized access by an insider.', ECS: 'user.name, email.mailbox.owner, event.action, source.ip, @timestamp, client.info' },
+            { logSource: 'Exchange Online', logName: 'Mailbox Forwarding Rule Created', priority: 'High', rationale: 'Often used by attackers for persistent access and data exfiltration from compromised mailboxes.', ECS: 'user.name, email.rule.name, email.forwarding.address, source.ip, @timestamp, event.outcome' },
+            { logSource: 'Exchange Online', logName: 'Anti-Malware/Anti-Phishing Detection', priority: 'Critical', rationale: 'Direct detection of malicious emails attempting to enter or leave the organization.', ECS: 'email.from.address, email.to.address, email.subject, threat.type, action.outcome, email.id, @timestamp, detection.engine' },
+            { logSource: 'Exchange Online', logName: 'Unusual Email Send Volume', priority: 'High', rationale: 'Could indicate a compromised mailbox being used for spam, phishing, or data exfiltration campaigns.', ECS: 'email.from.address, email.to.count, email.subject, email.bytes, source.ip, @timestamp, anomaly.threshold' },
+            { logSource: 'Exchange Online', logName: 'Mailbox Permission Change', priority: 'High', rationale: 'Unauthorized changes to mailbox permissions can grant access to sensitive email data.', ECS: 'user.name, email.mailbox.name, email.permission.changed, old_value, new_value, source.ip, @timestamp, event.outcome' },
+            { logSource: 'Exchange Online', logName: 'DMARC/SPF/DKIM Failure', priority: 'Medium', rationale: 'Indicates potential email spoofing or phishing attempts that failed authentication checks.', ECS: 'email.from.domain, email.to.domain, email.authentication.result, email.policy.action, @timestamp, email.id' },
+            { logSource: 'Exchange Online', logName: 'Transport Rule Modification', priority: 'High', rationale: 'Changes to email flow rules can be used to bypass security controls or redirect sensitive emails.', ECS: 'user.name, email.rule.name, event.action (add/modify/delete), old_rule, new_rule, @timestamp' },
 
-            { logSource: 'General Audit Log', logName: 'System Configuration Change', priority: 'Medium', rationale: 'Changes to critical system settings (e.g., time synchronization, logging levels) can indicate tampering or misconfiguration.', keyFields: 'System Name, Configuration Item, Old Value, New Value, User, Timestamp' },
-            { logSource: 'General Audit Log', logName: 'Software Installation/Uninstallation', priority: 'Medium', rationale: 'Monitoring unauthorized software deployment or removal, which can introduce vulnerabilities or remove security tools.', keyFields: 'System Name, Software Name, Version, Action (Install/Uninstall), User, Timestamp' },
-            { logSource: 'General Audit Log', logName: 'Scheduled Task Creation/Modification', priority: 'Medium', rationale: 'Detects persistence mechanisms or unauthorized code execution via scheduled tasks.', keyFields: 'System Name, Task Name, Command, User, Timestamp' },
-            { logSource: 'General Audit Log', logName: 'Administrative Command Execution', priority: 'Medium', rationale: 'Monitor for execution of commands with elevated privileges, useful for detecting suspicious activity.', keyFields: 'System Name, User, Command Line, Process ID, Timestamp' }
+            // General Audit Logs (Expanded)
+            { logSource: 'General Audit Log', logName: 'System Configuration Change', priority: 'Medium', rationale: 'Changes to critical system settings (e.g., time synchronization, logging levels) can indicate tampering or misconfiguration.', ECS: 'system.name, configuration.item, old_value, new_value, user.name, @timestamp, event.outcome' },
+            { logSource: 'General Audit Log', logName: 'Software Installation/Uninstallation', priority: 'Medium', rationale: 'Monitoring unauthorized software deployment or removal, which can introduce vulnerabilities or remove security tools.', ECS: 'system.name, software.name, software.version, event.action (install/uninstall), user.name, @timestamp, event.outcome' },
+            { logSource: 'General Audit Log', logName: 'Scheduled Task Creation/Modification', priority: 'Medium', rationale: 'Detects persistence mechanisms or unauthorized code execution via scheduled tasks.', ECS: 'system.name, task.name, process.command_line, user.name, @timestamp, event.outcome' },
+            { logSource: 'General Audit Log', logName: 'Administrative Command Execution', priority: 'Medium', rationale: 'Monitor for execution of commands with elevated privileges, useful for detecting suspicious activity.', ECS: 'system.name, user.name, process.command_line, process.pid, @timestamp, event.outcome' },
+            { logSource: 'General Audit Log', logName: 'Account Lockout/Unlock', priority: 'Medium', rationale: 'Track account lockout events and subsequent unlocks, which can indicate brute-force attacks or account recovery abuse.', ECS: 'user.name, account.status, actor.name, @timestamp, source.ip' },
+            { logSource: 'General Audit Log', logName: 'Security Policy Change', priority: 'High', rationale: 'Modifications to security policies (e.g., password policy, firewall policy) can weaken overall security posture.', ECS: 'policy.name, event.action, old_value, new_value, user.name, @timestamp' },
+            { logSource: 'General Audit Log', logName: 'Data Export/Download', priority: 'Medium', rationale: 'Monitoring large data exports or downloads from critical systems, indicating potential data exfiltration.', ECS: 'user.name, source.system, destination.system, file.name, file.bytes, @timestamp' }
         ];
-
         let currentSort = { key: 'priority', order: 'asc' };
-        let priorityChart, sourceChart;
+        let priorityChart, sourceChart, ingestionOrderChart; // Added ingestionOrderChart
         
         const priorityColors = {
             'Critical': { bg: 'rgba(239, 68, 68, 0.2)', border: 'rgba(239, 68, 68, 1)' },
@@ -241,7 +282,53 @@
 
         const priorityOrder = { 'Critical': 1, 'High': 2, 'Medium': 3, 'Informational': 4 };
 
+        // Markdown content for the rationale section
+        const rationaleMarkdown = `
+In the complex landscape of modern cybersecurity, Security Information and Event Management (SIEM) systems are vital for centralizing security data and enabling threat detection. However, the sheer volume of log data generated can quickly overwhelm security operations teams, leading to "alert fatigue" and potentially missed critical threats. This isn't just a "big data" problem; it's fundamentally a "data analysis" challenge.
+
+Prioritizing SIEM logs is not merely an option for optimization; it's a critical security imperative. Here's why:
+
+* **Combating Alert Fatigue:** Without prioritization, security analysts are inundated with a massive volume of alerts, many of which may be low-priority or false positives. This leads to desensitization, where genuine threats are overlooked amidst the noise, significantly increasing the risk of a breach.
+
+* **Optimizing Resource Allocation:** Indiscriminate log collection leads to inflated storage costs and consumes excessive computational power for processing. By focusing on high-value data sources, organizations can significantly reduce these operational expenses, ensuring that valuable SIEM resources are utilized effectively.
+
+* **Enhancing Threat Detection Accuracy:** Strategic prioritization ensures that the SIEM ingests and analyzes the most relevant data for specific security use cases (e.g., ransomware, insider threats, privilege escalation). This targeted approach provides deeper visibility into critical events, allowing for earlier and more accurate detection of sophisticated attacks.
+
+* **Streamlining Incident Response:** When logs are prioritized, security teams can quickly identify and focus on the most critical alerts. This streamlines investigation workflows, reduces the Mean Time To Detect (MTTD) and Mean Time To Respond (MTTR), and enables more agile and effective incident resolution.
+
+* **Improving Compliance Posture:** Many regulatory frameworks (like NIST) mandate specific logging and audit trail requirements. Prioritizing logs ensures that essential data for compliance is collected, retained, and available for auditing, helping organizations meet their regulatory obligations.
+
+* **Gaining Actionable Intelligence:** Prioritization allows for better correlation and analysis of events. High-volume logs, when properly managed and prioritized, can be correlated with threat intelligence feeds to transform raw data into actionable security insights, enabling proactive defense.
+
+* **Avoiding "Logging for the Sake of Logging":** Without clear objectives and prioritization, organizations risk collecting logs that serve no defined security purpose. This "logging for the sake of logging" wastes resources and adds noise, ultimately diminishing the return on investment from the SIEM platform.
+
+By meticulously focusing log ingestion on high-value data sources directly aligned with specific security use cases and an organization's unique risk profile, cybersecurity professionals can build a more resilient, efficient, and ultimately more effective SIEM foundation. The emphasis shifts from simply collecting more data to collecting the *right* data, ensuring its quality and actionability are paramount for robust cybersecurity defense.
+        `;
+
+        // Simple Markdown to HTML converter (for basic markdown)
+        function markdownToHtml(markdown) {
+            let html = markdown
+                .replace(/^### (.*$)/g, '<h3>$1</h3>')   // H3
+                .replace(/^## (.*$)/g, '<h2>$1</h2>')    // H2
+                .replace(/^# (.*$)/g, '<h1>$1</h1>')     // H1
+                .replace(/^\* (.*$)/g, '<li>$1</li>')    // Unordered list items
+                .replace(/^(?!<h|<li)(.*$)/gm, '<p>$1</p>') // Paragraphs (lines not starting with h or li)
+                .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>') // Bold
+                .replace(/\*(.*?)\*/g, '<em>$1</em>'); // Italic
+
+            // Wrap list items in ul tags
+            html = html.replace(/(<li>.*?<\/li>)+/gs, '<ul>$&\n</ul>');
+            
+            // Remove empty paragraphs that might be created by extra newlines
+            html = html.replace(/<p>\s*<\/p>/g, '');
+
+            return html;
+        }
+
         document.addEventListener('DOMContentLoaded', () => {
+            // Populate the rationale content
+            document.getElementById('rationale-content').innerHTML = markdownToHtml(rationaleMarkdown);
+
             populateSourceFilter();
             setupEventListeners();
             render();
@@ -270,6 +357,19 @@
                         currentSort.order = 'asc';
                     }
                     render();
+                }
+            });
+
+            // Toggle rationale section
+            document.getElementById('toggle-rationale').addEventListener('click', () => {
+                const rationaleDiv = document.getElementById('rationale-content');
+                const toggleButton = document.getElementById('toggle-rationale');
+                if (rationaleDiv.classList.contains('expanded')) {
+                    rationaleDiv.classList.remove('expanded');
+                    toggleButton.textContent = 'Read Full Rationale ▼';
+                } else {
+                    rationaleDiv.classList.add('expanded');
+                    toggleButton.textContent = 'Hide Rationale ▲';
                 }
             });
         }
@@ -346,7 +446,7 @@
                         <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full">${log.priority}</span>
                     </td>
                     <td class="px-6 py-4">${log.rationale}</td>
-                    <td class="px-6 py-4 font-mono text-xs">${log.keyFields}</td>
+                    <td class="px-6 py-4 font-mono text-xs">${log.ECS}</td>
                 `;
                 tableBody.appendChild(row);
             });
@@ -355,6 +455,7 @@
         function renderCharts(data) {
             renderPriorityChart(data);
             renderSourceChart(data);
+            renderIngestionOrderChart(); // Call the new chart render function
         }
 
         function renderPriorityChart(data) {
@@ -444,6 +545,70 @@
                                 beginAtZero: true,
                                 ticks: {
                                     stepSize: 1
+                                }
+                            }
+                        }
+                    }
+                });
+            }
+        }
+
+        function renderIngestionOrderChart() {
+            const ctx = document.getElementById('ingestionOrderChart').getContext('2d');
+            const labels = ['Critical', 'High', 'Medium', 'Informational'];
+            // Data values can be arbitrary, just to show the bars. Using a simple descending scale.
+            const chartData = [4, 3, 2, 1]; 
+            const bgColors = labels.map(label => priorityColors[label].bg);
+            const borderColors = labels.map(label => priorityColors[label].border);
+
+            if (ingestionOrderChart) {
+                ingestionOrderChart.data.labels = labels;
+                ingestionOrderChart.data.datasets[0].data = chartData;
+                ingestionOrderChart.data.datasets[0].backgroundColor = bgColors;
+                ingestionOrderChart.data.datasets[0].borderColor = borderColors;
+                ingestionOrderChart.update();
+            } else {
+                ingestionOrderChart = new Chart(ctx, {
+                    type: 'bar',
+                    data: {
+                        labels: labels,
+                        datasets: [{
+                            label: 'Priority Order',
+                            data: chartData,
+                            backgroundColor: bgColors,
+                            borderColor: borderColors,
+                            borderWidth: 1
+                        }]
+                    },
+                    options: {
+                        indexAxis: 'y', // Horizontal bar chart
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: {
+                            legend: {
+                                display: false // No legend needed for this simple order chart
+                            },
+                            tooltip: {
+                                callbacks: {
+                                    label: function(context) {
+                                        return context.label + ' (Ingest First)'; // Custom tooltip
+                                    }
+                                }
+                            }
+                        },
+                        scales: {
+                            x: {
+                                beginAtZero: true,
+                                ticks: {
+                                    display: false // Hide x-axis ticks as they are not meaningful for this order
+                                },
+                                grid: {
+                                    display: false // Hide grid lines
+                                }
+                            },
+                            y: {
+                                grid: {
+                                    display: false // Hide grid lines
                                 }
                             }
                         }
